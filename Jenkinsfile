@@ -1,47 +1,46 @@
 pipeline {
-    agent any
+  agent any
 
-    tools {
-        gradle 'Gradle 7+'  // Ensure this is correctly set in Jenkins global tool config
+  environment {
+    DOCKERHUB_CREDENTIALS = credentials('dockerhub-creds')
+  }
+
+  stages {
+    stage('Clone') {
+      steps {
+        git branch: 'develop', url: 'https://github.com/AyushiR0y/jenkins-docker.git'
+      }
     }
 
-    environment {
-        ARTIFACTORY_CREDENTIALS = credentials('artifactory-credential')  // Correct spelling
+    stage('Build with Maven') {
+      steps {
+        sh 'mvn clean package'
+      }
     }
 
-    stages {
-        stage('Checkout') {
-            steps {
-                git branch: 'develop', url: 'https://github.com/AyushiR0y/jenkins.git'
-            }
-        }
-
-        stage('Build Services') {
-            steps {
-                script {
-                    sh 'chmod +x user-service/gradlew'
-                    sh 'chmod +x order-service/gradlew'
-                    def services = ['user-service', 'order-service']
-                    for (service in services) {
-                        sh "./${service}/gradlew -p ${service} clean build"
-                    }
-                }
-            }
-        }
-
-        stage('Publish to Artifactory') {
-            steps {
-                script {
-                    def services = ['user-service', 'order-service']
-                    for (service in services) {
-                        sh """
-                        ./${service}/gradlew -p ${service} publish \\
-                        -Partifactory_user="$ARTIFACTORY_CREDENTIALS_USR" \\
-                        -Partifactory_password="$ARTIFACTORY_CREDENTIALS_PSW"
-                        """
-                    }
-                }
-            }
-        }
+    stage('Docker Build & Push') {
+      steps {
+        sh '''
+        docker build -t your-dockerhub-username/rest-api:latest .
+        echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS_USR --password-stdin
+        docker push your-dockerhub-username/rest-api:latest
+        '''
+      }
     }
+
+    stage('Deploy to AWS EC2') {
+      steps {
+        sshagent (credentials: ['ec2-ssh-key']) {
+          sh '''
+          ssh -o StrictHostKeyChecking=no ec2-user@<EC2-IP> '
+            docker pull your-dockerhub-username/rest-api:latest &&
+            docker stop api || true &&
+            docker rm api || true &&
+            docker run -d --name api -p 8080:8080 your-dockerhub-username/rest-api:latest
+          '
+          '''
+        }
+      }
+    }
+  }
 }
